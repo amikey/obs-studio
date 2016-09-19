@@ -2,6 +2,7 @@
 #include <obs-module.h>
 #include <util/windows/win-version.h>
 #include <util/platform.h>
+#include "select-region.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("win-capture", "en-US")
@@ -65,4 +66,9 @@ bool obs_module_load(void)
 	}
 
 	return true;
+}
+
+void obs_module_unload()
+{
+	select_region_free();
 }

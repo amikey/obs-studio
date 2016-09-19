@@ -6,6 +6,7 @@
 #define TEXT_COMPATIBILITY   obs_module_text("Compatibility")
 #define TEXT_MONITOR         obs_module_text("Monitor")
 #define TEXT_PRIMARY_MONITOR obs_module_text("PrimaryMonitor")
+#define TEXT_SELECT_REGION   obs_module_text("SelectRegion")
 
 struct monitor_capture {
 	obs_source_t      *source;
@@ -211,6 +212,13 @@ static BOOL CALLBACK enum_monitor_props(HMONITOR handle, HDC hdc, LPRECT rect,
 	return TRUE;
 }
 
+static bool select_region(obs_properties_t *props, obs_property_t *p,
+		void *data)
+{
+	struct monitor_capture *capture = data;
+	return false;
+}
+
 static obs_properties_t *monitor_capture_properties(void *unused)
 {
 	UNUSED_PARAMETER(unused);
@@ -223,6 +231,9 @@ static obs_properties_t *monitor_capture_properties(void *unused)
 
 	obs_properties_add_bool(props, "compatibility", TEXT_COMPATIBILITY);
 	obs_properties_add_bool(props, "capture_cursor", TEXT_CAPTURE_CURSOR);
+
+	obs_properties_add_button(props, "select_region", TEXT_SELECT_REGION,
+			select_region);
 
 	EnumDisplayMonitors(NULL, NULL, enum_monitor_props, (LPARAM)monitors);
 
