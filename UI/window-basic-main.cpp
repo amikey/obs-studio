@@ -6844,6 +6844,7 @@ void OBSBasic::ResizeOutputSizeOfSource()
 QAction *OBSBasic::AddDockWidgetMenu(QDockWidget *dock)
 {
 	QAction *action = ui->viewMenuDocks->addAction(dock->windowTitle());
+	action->setCheckable(true);
 	assignDockToggle(dock, action);
 	return action;
 }
