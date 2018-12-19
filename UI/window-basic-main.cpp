@@ -3635,10 +3635,6 @@ void OBSBasic::closeEvent(QCloseEvent *event)
 				"BasicWindow", "geometry",
 				saveGeometry().toBase64().constData());
 
-	config_set_string(App()->GlobalConfig(),
-			"BasicWindow", "DockState",
-			saveState().toBase64().constData());
-
 	if (outputHandler && outputHandler->Active()) {
 		SetShowing(true);
 
@@ -3669,6 +3665,11 @@ void OBSBasic::closeEvent(QCloseEvent *event)
 
 	Auth::Save();
 	SaveProjectNow();
+	auth.reset();
+
+	config_set_string(App()->GlobalConfig(),
+			"BasicWindow", "DockState",
+			saveState().toBase64().constData());
 
 	if (api)
 		api->on_event(OBS_FRONTEND_EVENT_EXIT);
@@ -3677,7 +3678,6 @@ void OBSBasic::closeEvent(QCloseEvent *event)
 
 	/* Clear all scene data (dialogs, widgets, widget sub-items, scenes,
 	 * sources, etc) so that all references are released before shutdown */
-	auth.reset();
 	ClearSceneData();
 
 	App()->quit();
