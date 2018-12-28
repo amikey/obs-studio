@@ -368,6 +368,7 @@ set(libobs_libobs_SOURCES
 	obs-audio-controls.c
 	obs-avc.c
 	obs-encoder.c
+	obs-encoder-gpu-encode.c
 	obs-service.c
 	obs-source.c
 	obs-source-deinterlace.c

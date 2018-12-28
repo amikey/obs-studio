@@ -384,10 +384,22 @@ end:
 }
 
 #ifdef _WIN32
+static inline bool queue_frame(obs_encoder_t *encoder, gs_texture_t *texture)
+{
+	bool success = encoder->info.queue_texture(encoder->context.data,
+			texture, encoder->gpu_lock_key, encoder->cur_pts);
+	if (success)
+		os_sem_post(encoder->gpu_encode_semaphore);
+	return success;
+}
+
+extern void full_stop(struct obs_encoder *encoder);
+
 static inline void encode_gpu(obs_encoder_t *encoder, gs_texture_t *texture,
 		struct obs_vframe_info *vframe_info)
 {
 	struct obs_encoder *pair = encoder->paired_encoder;
+	bool success = true;
 
 	if (!encoder->first_received && pair) {
 		if (!pair->first_received ||
@@ -399,23 +411,12 @@ static inline void encode_gpu(obs_encoder_t *encoder, gs_texture_t *texture,
 	if (!encoder->start_ts)
 		encoder->start_ts = vframe_info->timestamp;
 
-	struct encoder_packet pkt = {0};
-	bool received = false;
-	bool success;
-
-	pkt.timebase_num = encoder->timebase_num;
-	pkt.timebase_den = encoder->timebase_den;
-	pkt.encoder = encoder;
-
-	for (int i = 0; i < vframe_info->count; i++) {
-		gs_texture_release_sync(texture, encoder->gpu_lock_key);
-		success = encoder->info.encode_texture(encoder->context.data,
-				texture, encoder->gpu_lock_key,
-				encoder->cur_pts, &pkt, &received);
-		gs_texture_acquire_sync(texture, 0, GS_WAIT_INFINITE);
+	for (int i = 0; i < vframe_info->count && success; i++) {
+		success = queue_frame(encoder, texture);
 	}
 
-	send_off_encoder_packet(encoder, success, received, &pkt);
+	if (!success)
+		full_stop(encoder);
 
 	encoder->cur_pts += encoder->timebase_num;
 }

@@ -1,5 +1,6 @@
 #include "jim-nvenc.h"
 #include <util/circlebuf.h>
+#include <util/threading.h>
 #include <util/darray.h>
 #include <util/dstr.h>
 #include <obs-avc.h>
@@ -24,6 +25,12 @@ struct handle_tex {
 	IDXGIKeyedMutex *km;
 };
 
+struct queue_tex {
+	size_t  idx;
+	size_t  count;
+	int64_t pts;
+};
+
 /* ------------------------------------------------------------------------- */
 /* Main Implementation Structure                                             */
 
@@ -38,6 +45,8 @@ struct nvenc_data {
 	size_t                   buffers_queued;
 	size_t                   next_bitstream;
 	size_t                   cur_bitstream;
+	size_t                   next_texture;
+	volatile long            textures_encoding;
 	bool                     encode_started;
 	bool                     first_packet;
 	bool                     cbr;
@@ -46,7 +55,9 @@ struct nvenc_data {
 	DARRAY(struct nv_bitstream) bitstreams;
 	DARRAY(struct nv_texture)   textures;
 	DARRAY(struct handle_tex)   input_textures;
+	struct circlebuf            queued_textures;
 	struct circlebuf            dts_list;
+	CRITICAL_SECTION            texture_mutex;
 
 	DARRAY(uint8_t) packet_data;
 	int64_t         packet_pts;
@@ -65,12 +76,18 @@ struct nvenc_data {
 	size_t  sei_size;
 };
 
+static inline size_t textures_queued(struct nvenc_data *enc)
+{
+	return enc->queued_textures.size / sizeof(struct queue_tex);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Bitstream Buffer                                                          */
 
 struct nv_bitstream {
 	void   *ptr;
 	HANDLE event;
+	bool   duplicate;
 };
 
 static bool nv_bitstream_init(struct nvenc_data *enc, struct nv_bitstream *bs)
@@ -549,6 +566,8 @@ static void *nvenc_create(obs_data_t *settings, obs_encoder_t *encoder)
 	enc->encoder = encoder;
 	enc->first_packet = true;
 
+	InitializeCriticalSection(&enc->texture_mutex);
+
 	if (!obs_nv12_tex_active()) {
 		goto fail;
 	}
@@ -622,10 +641,12 @@ static void nvenc_destroy(void *data)
 	bfree(enc->header);
 	bfree(enc->sei);
 	circlebuf_free(&enc->dts_list);
+	circlebuf_free(&enc->queued_textures);
 	da_free(enc->textures);
 	da_free(enc->bitstreams);
 	da_free(enc->input_textures);
 	da_free(enc->packet_data);
+	DeleteCriticalSection(&enc->texture_mutex);
 	bfree(enc);
 }
 
@@ -743,51 +764,63 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 			enc->cur_bitstream = 0;
 
 		enc->buffers_queued--;
+
+		if (!bs->duplicate)
+			os_atomic_dec_long(&enc->textures_encoding);
 	}
 
 	return true;
 }
 
-static bool nvenc_encode_tex(void *data, gs_texture_t *tex,
-		uint64_t lock_key, int64_t pts,
-		struct encoder_packet *packet, bool *received_packet)
+static inline long textures_encoding(struct nvenc_data *enc)
 {
-	struct nvenc_data   *enc     = data;
-	uint32_t            handle   = gs_texture_get_shared_handle(tex);
-	ID3D11Device        *device  = enc->device;
-	ID3D11DeviceContext *context = enc->context;
+	return os_atomic_load_long(&enc->textures_encoding);
+}
+
+static bool nvenc_queue_tex(void *data, gs_texture_t *tex,
+		uint64_t lock_key, int64_t pts)
+{
+	struct nvenc_data   *enc       = data;
+	uint32_t            handle     = gs_texture_get_shared_handle(tex);
+	size_t              queue_size = textures_queued(enc);
+	ID3D11DeviceContext *context   = enc->context;
 	ID3D11Texture2D     *input_tex;
 	ID3D11Texture2D     *output_tex;
 	struct nv_texture   *nvtex;
 	IDXGIKeyedMutex     *km;
-	struct nv_bitstream *bs;
-	NVENCSTATUS         err;
+	struct queue_tex    qt;
 
-	if (handle == GS_INVALID_HANDLE) {
-		error("Encode failed: bad texture handle");
-		return false;
-	}
+	/* ------------------ */
 
-	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
-
-	bs    = &enc->bitstreams.array[enc->next_bitstream];
-	nvtex = &enc->textures.array[enc->next_bitstream];
-
-	input_tex  = get_tex_from_handle(enc, handle, &km);
-	output_tex = nvtex->tex;
-
+	input_tex = get_tex_from_handle(enc, handle, &km);
 	if (!input_tex) {
 		return false;
 	}
 
-	/* ------------------------------------ */
-	/* wait for output bitstream/tex        */
+	EnterCriticalSection(&enc->texture_mutex);
 
-	WaitForSingleObject(bs->event, INFINITE);
+	if (textures_encoding(enc) == (long)enc->buf_count) {
+		struct queue_tex *last = circlebuf_data(&enc->queued_textures,
+				enc->queued_textures.size - sizeof(qt));
+		last->count++;
+		goto unlock;
+	}
 
-	/* ------------------------------------ */
-	/* copy to output tex                   */
+	qt.idx   = enc->next_texture;
+	qt.count = 1;
+	qt.pts   = pts;
 
+	nvtex = &enc->textures.array[enc->next_texture];
+	output_tex = nvtex->tex;
+
+	if (++enc->next_texture == enc->buf_count)
+		enc->next_texture = 0;
+
+	LeaveCriticalSection(&enc->texture_mutex);
+
+	/* ------------------ */
+
+	gs_texture_release_sync(tex, lock_key);
 	km->lpVtbl->AcquireSync(km, lock_key, INFINITE);
 
 	context->lpVtbl->CopyResource(context,
@@ -795,9 +828,60 @@ static bool nvenc_encode_tex(void *data, gs_texture_t *tex,
 			(ID3D11Resource *)input_tex);
 
 	km->lpVtbl->ReleaseSync(km, 0);
+	gs_texture_acquire_sync(tex, 0, GS_WAIT_INFINITE);
+
+	os_atomic_inc_long(&enc->textures_encoding);
+
+	/* ------------------ */
+
+	EnterCriticalSection(&enc->texture_mutex);
+	circlebuf_push_back(&enc->queued_textures, &qt, sizeof(qt));
+unlock:
+	LeaveCriticalSection(&enc->texture_mutex);
+	return true;
+}
+
+static bool nvenc_encode(void *data, struct encoder_frame *frame,
+		struct encoder_packet *packet, bool *received_packet)
+{
+	struct nvenc_data   *enc      = data;
+	bool                duplicate = false;;
+	struct nv_texture   *nvtex;
+	struct nv_bitstream *bs;
+	NVENCSTATUS         err;
+	struct queue_tex    *qt;
+	int64_t             pts;
+
+	/* frame is NULL for texture-based encoders */
+	UNUSED_PARAMETER(frame);
 
 	/* ------------------------------------ */
-	/* map output tex so nvenc can use it   */
+	/* get next texture to encode           */
+
+	EnterCriticalSection(&enc->texture_mutex);
+	qt = circlebuf_data(&enc->queued_textures, 0);
+	if (!qt) {
+		error("Well, this is unexpected.  No textures are queued.");
+		LeaveCriticalSection(&enc->texture_mutex);
+		return false;
+	}
+
+	nvtex = &enc->textures.array[qt->idx];
+	pts = qt->pts;
+
+	if (!--qt->count) {
+		circlebuf_pop_front(&enc->queued_textures, NULL, sizeof(*qt));
+	} else {
+		qt->pts++;
+		duplicate = true;
+	}
+
+	LeaveCriticalSection(&enc->texture_mutex);
+
+	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
+
+	/* ------------------------------------ */
+	/* map texture resource to nvenc        */
 
 	NV_ENC_MAP_INPUT_RESOURCE map = {NV_ENC_MAP_INPUT_RESOURCE_VER};
 	map.registeredResource        = nvtex->res;
@@ -809,6 +893,9 @@ static bool nvenc_encode_tex(void *data, gs_texture_t *tex,
 
 	/* ------------------------------------ */
 	/* do actual encode call                */
+
+	bs            = &enc->bitstreams.array[enc->next_bitstream];
+	bs->duplicate = duplicate;
 
 	NV_ENC_PIC_PARAMS params = {0};
 	params.version           = NV_ENC_PIC_PARAMS_VER;
@@ -904,7 +991,8 @@ struct obs_encoder_info nvenc_info = {
 	.create                  = nvenc_create,
 	.destroy                 = nvenc_destroy,
 	.update                  = nvenc_update,
-	.encode_texture          = nvenc_encode_tex,
+	.queue_texture           = nvenc_queue_tex,
+	.encode                  = nvenc_encode,
 	.get_defaults            = nvenc_defaults,
 	.get_properties          = nvenc_properties,
 	.get_extra_data          = nvenc_extra_data,

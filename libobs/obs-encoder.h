@@ -154,7 +154,8 @@ struct obs_encoder_info {
 	 *
 	 * @param       data             Data associated with this encoder
 	 *                               context
-	 * @param[in]   frame            Raw audio/video data to encode
+	 * @param[in]   frame            Raw audio/video data to encode, or
+	 *                               NULL if texture encoding
 	 * @param[out]  packet           Encoder packet output, if any
 	 * @param[out]  received_packet  Set to true if a packet was received,
 	 *                               false otherwise
@@ -236,9 +237,8 @@ struct obs_encoder_info {
 
 	uint32_t caps;
 
-	bool (*encode_texture)(void *data, gs_texture_t *texture,
-			uint64_t lock_key, int64_t pts,
-			struct encoder_packet *packet, bool *received_packet);
+	bool (*queue_texture)(void *data, gs_texture_t *texture,
+			uint64_t lock_key, int64_t pts);
 };
 
 EXPORT void obs_register_encoder_s(const struct obs_encoder_info *info,
