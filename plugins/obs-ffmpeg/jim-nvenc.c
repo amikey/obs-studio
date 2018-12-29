@@ -502,7 +502,7 @@ static bool init_encoder(struct nvenc_data *enc, obs_data_t *settings)
 	     "\t2-pass:       %s\n"
 	     "\tb-frames:     %d\n"
 	     "\tGPU:          %d\n",
-	     rc, (int)config->rcParams.maxBitRate, cqp, gop_size,
+	     rc, bitrate, cqp, gop_size,
 	     preset, profile,
 	     enc->cx, enc->cy,
 	     twopass ? "true" : "false",
