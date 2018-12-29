@@ -90,6 +90,7 @@ static inline size_t textures_queued(struct nvenc_data *enc)
 struct nv_bitstream {
 	void   *ptr;
 	HANDLE event;
+	size_t tex_idx;
 	bool   duplicate;
 };
 
@@ -722,7 +723,7 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 	for (size_t i = 0; i < count; i++) {
 		size_t cur_bs_idx          = enc->cur_bitstream;
 		struct nv_bitstream *bs    = &enc->bitstreams.array[cur_bs_idx];
-		struct nv_texture   *nvtex = &enc->textures.array[cur_bs_idx];
+		struct nv_texture   *nvtex = &enc->textures.array[bs->tex_idx];
 
 		/* ---------------- */
 
@@ -880,7 +881,8 @@ static bool nvenc_encode(void *data, struct encoder_frame *frame,
 		return false;
 	}
 
-	nvtex = &enc->textures.array[qt->idx];
+	size_t tex_idx = qt->idx;
+	nvtex = &enc->textures.array[tex_idx];
 	pts = qt->pts;
 
 	if (!--qt->count) {
@@ -912,6 +914,7 @@ static bool nvenc_encode(void *data, struct encoder_frame *frame,
 	/* do actual encode call                */
 
 	bs            = &enc->bitstreams.array[enc->next_bitstream];
+	bs->tex_idx   = tex_idx;
 	bs->duplicate = duplicate;
 
 	NV_ENC_PIC_PARAMS params = {0};
