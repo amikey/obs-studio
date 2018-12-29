@@ -12,6 +12,7 @@
 /* ========================================================================= */
 
 #define EXTRA_BUFFERS 5
+//#define DEBUG_TEXTURES
 
 #define error_hr(msg) \
 	error("%s: %s: 0x%08lX", __FUNCTION__, msg, (uint32_t)hr);
@@ -780,8 +781,12 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 
 		enc->buffers_queued--;
 
-		if (!bs->duplicate)
+		if (!bs->duplicate) {
+#ifdef DEBUG_TEXTURES
+			blog(LOG_DEBUG, "unmapping %ld", (long)bs->tex_idx);
+#endif
 			os_atomic_dec_long(&enc->textures_encoding);
+		}
 	}
 
 	return true;
@@ -814,12 +819,30 @@ static bool nvenc_queue_tex(void *data, gs_texture_t *tex,
 
 	EnterCriticalSection(&enc->texture_mutex);
 
-	if (textures_encoding(enc) == (long)enc->buf_count) {
+	long num_encoding = textures_encoding(enc);
+	if (num_encoding == (long)enc->buf_count) {
 		struct queue_tex *last = circlebuf_data(&enc->queued_textures,
 				enc->queued_textures.size - sizeof(qt));
 		last->count++;
+#ifdef DEBUG_TEXTURES
+		blog(LOG_DEBUG, "duplicating texture %ld: "
+				"textures_encoding: %ld, "
+				"buf_count: %ld",
+				(long)last->idx,
+				num_encoding,
+				(long)enc->buf_count);
+#endif
 		goto unlock;
 	}
+
+#ifdef DEBUG_TEXTURES
+	blog(LOG_DEBUG, "queuing texture: next_texture: %ld, "
+			"textures_encoding: %ld, "
+			"buf_count: %ld",
+			(long)enc->next_texture,
+			num_encoding,
+			(long)enc->buf_count);
+#endif
 
 	qt.idx   = enc->next_texture;
 	qt.count = 1;
@@ -898,6 +921,10 @@ static bool nvenc_encode(void *data, struct encoder_frame *frame,
 	LeaveCriticalSection(&enc->texture_mutex);
 
 	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
+
+#ifdef DEBUG_TEXTURES
+	blog(LOG_DEBUG, "encoding texture: idx: %ld", tex_idx);
+#endif
 
 	/* ------------------------------------ */
 	/* map texture resource to nvenc        */
