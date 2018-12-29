@@ -52,6 +52,9 @@ struct nvenc_data {
 	bool                     cbr;
 	bool                     bframes;
 
+	size_t frames_encoded;
+	size_t frames_skipped;
+
 	DARRAY(struct nv_bitstream) bitstreams;
 	DARRAY(struct nv_texture)   textures;
 	DARRAY(struct handle_tex)   input_textures;
@@ -638,6 +641,17 @@ static void nvenc_destroy(void *data)
 		enc->device->lpVtbl->Release(enc->device);
 	}
 
+	if (enc->frames_skipped) {
+		double percentage =
+			(double)enc->frames_skipped /
+			(double)enc->frames_encoded *
+			100.0;
+		warn("Frames encoded: %lld, frames skipped: %lld (%g)",
+				(long long)enc->frames_encoded,
+				(long long)enc->frames_skipped,
+				percentage);
+	}
+
 	bfree(enc->header);
 	bfree(enc->sei);
 	circlebuf_free(&enc->dts_list);
@@ -874,7 +888,10 @@ static bool nvenc_encode(void *data, struct encoder_frame *frame,
 	} else {
 		qt->pts++;
 		duplicate = true;
+		enc->frames_skipped++;
 	}
+
+	enc->frames_encoded++;
 
 	LeaveCriticalSection(&enc->texture_mutex);
 
