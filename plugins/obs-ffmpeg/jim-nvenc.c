@@ -1,6 +1,5 @@
 #include "jim-nvenc.h"
 #include <util/circlebuf.h>
-#include <util/threading.h>
 #include <util/darray.h>
 #include <util/dstr.h>
 #include <obs-avc.h>
@@ -12,14 +11,17 @@
 /* ========================================================================= */
 
 #define EXTRA_BUFFERS 5
-//#define DEBUG_TEXTURES
 
 #define error_hr(msg) \
 	error("%s: %s: 0x%08lX", __FUNCTION__, msg, (uint32_t)hr);
 
 struct nv_bitstream;
 struct nv_texture;
-struct handle_tex;
+
+struct handle_tex {
+	uint32_t handle;
+	ID3D11Texture2D *tex;
+};
 
 /* ------------------------------------------------------------------------- */
 /* Main Implementation Structure                                             */
@@ -41,7 +43,8 @@ struct nvenc_data {
 	bool                     bframes;
 
 	DARRAY(struct nv_bitstream) bitstreams;
-	DARRAY(struct handle_tex)   textures;
+	DARRAY(struct nv_texture)   textures;
+	DARRAY(struct handle_tex)   input_textures;
 	struct circlebuf            dts_list;
 
 	DARRAY(uint8_t) packet_data;
@@ -65,10 +68,8 @@ struct nvenc_data {
 /* Bitstream Buffer                                                          */
 
 struct nv_bitstream {
-	void     *ptr;
-	HANDLE   event;
-	void     *mapped_res;
-	uint32_t handle;
+	void   *ptr;
+	HANDLE event;
 };
 
 static bool nv_bitstream_init(struct nvenc_data *enc, struct nv_bitstream *bs)
@@ -109,10 +110,6 @@ fail:
 static void nv_bitstream_free(struct nvenc_data *enc, struct nv_bitstream *bs)
 {
 	if (bs->ptr) {
-		if (bs->mapped_res) {
-			nv.nvEncUnmapInputResource(enc->session, bs->mapped_res);
-		}
-
 		nv.nvEncDestroyBitstreamBuffer(enc->session, bs->ptr);
 
 		NV_ENC_EVENT_PARAMS params = {NV_ENC_EVENT_PARAMS_VER};
@@ -125,49 +122,59 @@ static void nv_bitstream_free(struct nvenc_data *enc, struct nv_bitstream *bs)
 /* ------------------------------------------------------------------------- */
 /* Texture Resource                                                          */
 
-struct handle_tex {
-	uint32_t        handle;
-	ID3D11Texture2D *tex;
+struct nv_texture {
 	void            *res;
+	ID3D11Texture2D *tex;
+	void            *mapped_res;
 };
 
-static bool nv_texture_init(struct nvenc_data *enc, struct handle_tex *nvtex,
-		uint32_t handle)
+static bool nv_texture_init(struct nvenc_data *enc, struct nv_texture *nvtex)
 {
+	ID3D11Device *device = enc->device;
+	ID3D11Texture2D *tex;
 	HRESULT hr;
 
-	hr = enc->device->lpVtbl->OpenSharedResource(enc->device,
-			(HANDLE)(uintptr_t)handle,
-			&IID_ID3D11Texture2D, &nvtex->tex);
+	D3D11_TEXTURE2D_DESC desc = {0};
+	desc.Width                = enc->cx;
+	desc.Height               = enc->cy;
+	desc.MipLevels            = 1;
+	desc.ArraySize            = 1;
+	desc.Format               = DXGI_FORMAT_NV12;
+	desc.SampleDesc.Count     = 1;
+	desc.BindFlags            = D3D11_BIND_RENDER_TARGET;
+
+	hr = device->lpVtbl->CreateTexture2D(device, &desc, NULL, &tex);
 	if (FAILED(hr)) {
-		error_hr("OpenSharedResource failed");
+		error_hr("Failed to create texture");
 		return false;
 	}
 
-	nvtex->tex->lpVtbl->SetEvictionPriority(nvtex->tex,
-			DXGI_RESOURCE_PRIORITY_MAXIMUM);
-
-	nvtex->handle = handle;
+	tex->lpVtbl->SetEvictionPriority(tex, DXGI_RESOURCE_PRIORITY_MAXIMUM);
 
 	NV_ENC_REGISTER_RESOURCE res = {NV_ENC_REGISTER_RESOURCE_VER};
 	res.resourceType             = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
-	res.resourceToRegister       = nvtex->tex;
+	res.resourceToRegister       = tex;
 	res.width                    = enc->cx;
 	res.height                   = enc->cy;
 	res.bufferFormat             = NV_ENC_BUFFER_FORMAT_NV12;
 
 	if (NV_FAILED(nv.nvEncRegisterResource(enc->session, &res))) {
-		nvtex->tex->lpVtbl->Release(nvtex->tex);
+		tex->lpVtbl->Release(tex);
 		return false;
 	}
 
 	nvtex->res = res.registeredResource;
+	nvtex->tex = tex;
 	return true;
 }
 
-static void nv_texture_free(struct nvenc_data *enc, struct handle_tex *nvtex)
+static void nv_texture_free(struct nvenc_data *enc, struct nv_texture *nvtex)
 {
 	if (nvtex->res) {
+		if (nvtex->mapped_res) {
+			nv.nvEncUnmapInputResource(enc->session,
+					nvtex->mapped_res);
+		}
 		nv.nvEncUnregisterResource(enc->session, nvtex->res);
 		nvtex->tex->lpVtbl->Release(nvtex->tex);
 	}
@@ -495,7 +502,7 @@ static bool init_encoder(struct nvenc_data *enc, obs_data_t *settings)
 	     "\t2-pass:       %s\n"
 	     "\tb-frames:     %d\n"
 	     "\tGPU:          %d\n",
-	     rc, bitrate, cqp, gop_size,
+	     rc, (int)config->rcParams.maxBitRate, cqp, gop_size,
 	     preset, profile,
 	     enc->cx, enc->cy,
 	     twopass ? "true" : "false",
@@ -514,6 +521,21 @@ static bool init_bitstreams(struct nvenc_data *enc)
 		}
 
 		da_push_back(enc->bitstreams, &bitstream);
+	}
+
+	return true;
+}
+
+static bool init_textures(struct nvenc_data *enc)
+{
+	da_reserve(enc->bitstreams, enc->buf_count);
+	for (size_t i = 0; i < enc->buf_count; i++) {
+		struct nv_texture texture;
+		if (!nv_texture_init(enc, &texture)) {
+			return false;
+		}
+
+		da_push_back(enc->textures, &texture);
 	}
 
 	return true;
@@ -549,6 +571,9 @@ static void *nvenc_create(obs_data_t *settings, obs_encoder_t *encoder)
 	if (!init_bitstreams(enc)) {
 		goto fail;
 	}
+	if (!init_textures(enc)) {
+		goto fail;
+	}
 
 	return enc;
 
@@ -563,6 +588,9 @@ static void nvenc_destroy(void *data)
 {
 	struct nvenc_data *enc = data;
 
+	for (size_t i = 0; i < enc->textures.num; i++) {
+		nv_texture_free(enc, &enc->textures.array[i]);
+	}
 	if (enc->encode_started) {
 		size_t next_bitstream = enc->next_bitstream;
 		HANDLE next_event = enc->bitstreams.array[next_bitstream].event;
@@ -579,8 +607,9 @@ static void nvenc_destroy(void *data)
 	if (enc->session) {
 		nv.nvEncDestroyEncoder(enc->session);
 	}
-	for (size_t i = 0; i < enc->textures.num; i++) {
-		nv_texture_free(enc, &enc->textures.array[i]);
+	for (size_t i = 0; i < enc->input_textures.num; i++) {
+		ID3D11Texture2D *tex = enc->input_textures.array[i].tex;
+		tex->lpVtbl->Release(tex);
 	}
 	if (enc->context) {
 		enc->context->lpVtbl->Release(enc->context);
@@ -594,27 +623,39 @@ static void nvenc_destroy(void *data)
 	circlebuf_free(&enc->dts_list);
 	da_free(enc->textures);
 	da_free(enc->bitstreams);
+	da_free(enc->input_textures);
 	da_free(enc->packet_data);
 	bfree(enc);
 }
 
-static struct handle_tex *get_tex_from_handle(struct nvenc_data *enc,
+static ID3D11Texture2D *get_tex_from_handle(struct nvenc_data *enc,
 		uint32_t handle)
 {
-	for (size_t i = 0; i < enc->textures.num; i++) {
-		struct handle_tex *ht = &enc->textures.array[i];
+	ID3D11Device    *device = enc->device;
+	ID3D11Texture2D *input_tex;
+	HRESULT         hr;
+
+	for (size_t i = 0; i < enc->input_textures.num; i++) {
+		struct handle_tex *ht = &enc->input_textures.array[i];
 		if (ht->handle == handle) {
-			return ht;
+			return ht->tex;
 		}
 	}
 
-	struct handle_tex new_ht;
-	if (!nv_texture_init(enc, &new_ht, handle)) {
+	hr = device->lpVtbl->OpenSharedResource(device,
+			(HANDLE)(uintptr_t)handle,
+			&IID_ID3D11Texture2D, &input_tex);
+	if (FAILED(hr)) {
+		error_hr("OpenSharedResource failed");
 		return NULL;
 	}
 
-	da_push_back(enc->textures, &new_ht);
-	return da_end(enc->textures);
+	input_tex->lpVtbl->SetEvictionPriority(input_tex,
+			DXGI_RESOURCE_PRIORITY_MAXIMUM);
+
+	struct handle_tex new_ht = {handle, input_tex};
+	da_push_back(enc->input_textures, &new_ht);
+	return input_tex;
 }
 
 static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
@@ -633,6 +674,7 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 	for (size_t i = 0; i < count; i++) {
 		size_t cur_bs_idx          = enc->cur_bitstream;
 		struct nv_bitstream *bs    = &enc->bitstreams.array[cur_bs_idx];
+		struct nv_texture   *nvtex = &enc->textures.array[cur_bs_idx];
 
 		/* ---------------- */
 
@@ -673,13 +715,13 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 
 		/* ---------------- */
 
-		if (bs->mapped_res) {
+		if (nvtex->mapped_res) {
 			NVENCSTATUS err;
-			err = nv.nvEncUnmapInputResource(s, bs->mapped_res);
+			err = nv.nvEncUnmapInputResource(s, nvtex->mapped_res);
 			if (nv_failed(err, __FUNCTION__, "unmap")) {
 				return false;
 			}
-			bs->mapped_res = NULL;
+			nvtex->mapped_res = NULL;
 		}
 
 		/* ---------------- */
@@ -688,31 +730,57 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 			enc->cur_bitstream = 0;
 
 		enc->buffers_queued--;
-		obs_unqueue_encode_texture(bs->handle);
 	}
 
 	return true;
 }
 
-static bool nvenc_encode_texture(void *data, uint32_t handle, int64_t pts,
+static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
 		struct encoder_packet *packet, bool *received_packet)
 {
 	struct nvenc_data   *enc     = data;
+	ID3D11Device        *device  = enc->device;
 	ID3D11DeviceContext *context = enc->context;
-	struct handle_tex   *nvtex   = get_tex_from_handle(enc, handle);
+	ID3D11Texture2D     *input_tex;
+	ID3D11Texture2D     *output_tex;
+	struct nv_texture   *nvtex;
 	struct nv_bitstream *bs;
 	NVENCSTATUS         err;
 
+	if (handle == GS_INVALID_HANDLE) {
+		error("Encode failed: bad texture handle");
+		return false;
+	}
+
 	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
+
+	bs    = &enc->bitstreams.array[enc->next_bitstream];
+	nvtex = &enc->textures.array[enc->next_bitstream];
+
+	input_tex  = get_tex_from_handle(enc, handle);
+	output_tex = nvtex->tex;
+
+	if (!input_tex) {
+		return false;
+	}
 
 	/* ------------------------------------ */
 	/* wait for output bitstream/tex        */
 
-	bs = &enc->bitstreams.array[enc->next_bitstream];
+	if ((rand() % 20) == 4)
+		Sleep(700);
+
 	WaitForSingleObject(bs->event, INFINITE);
 
 	/* ------------------------------------ */
-	/* map texture resource to nvenc        */
+	/* copy to output tex                   */
+
+	context->lpVtbl->CopyResource(context,
+			(ID3D11Resource *)output_tex,
+			(ID3D11Resource *)input_tex);
+
+	/* ------------------------------------ */
+	/* map output tex so nvenc can use it   */
 
 	NV_ENC_MAP_INPUT_RESOURCE map = {NV_ENC_MAP_INPUT_RESOURCE_VER};
 	map.registeredResource        = nvtex->res;
@@ -720,16 +788,15 @@ static bool nvenc_encode_texture(void *data, uint32_t handle, int64_t pts,
 		return false;
 	}
 
+	nvtex->mapped_res = map.mappedResource;
+
 	/* ------------------------------------ */
 	/* do actual encode call                */
-
-	bs->mapped_res = map.mappedResource;
-	bs->handle     = nvtex->handle;
 
 	NV_ENC_PIC_PARAMS params = {0};
 	params.version           = NV_ENC_PIC_PARAMS_VER;
 	params.pictureStruct     = NV_ENC_PIC_STRUCT_FRAME;
-	params.inputBuffer       = bs->mapped_res;
+	params.inputBuffer       = nvtex->mapped_res;
 	params.bufferFmt         = NV_ENC_BUFFER_FORMAT_NV12;
 	params.inputTimeStamp    = (uint64_t)pts;
 	params.inputWidth        = enc->cx;
@@ -820,7 +887,7 @@ struct obs_encoder_info nvenc_info = {
 	.create                  = nvenc_create,
 	.destroy                 = nvenc_destroy,
 	.update                  = nvenc_update,
-	.encode_texture          = nvenc_encode_texture,
+	.encode_texture          = nvenc_encode_tex,
 	.get_defaults            = nvenc_defaults,
 	.get_properties          = nvenc_properties,
 	.get_extra_data          = nvenc_extra_data,

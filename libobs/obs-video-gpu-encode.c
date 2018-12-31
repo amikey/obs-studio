@@ -99,13 +99,9 @@ static void *gpu_encode_thread(void *unused)
 
 		pthread_mutex_lock(&video->gpu_encoder_mutex);
 		if (!tf.count) {
-			if (!tf.refs)
-				circlebuf_push_back(
-						&video->gpu_encoder_avail_queue,
-						&tf, sizeof(tf));
-			else
-				da_push_back(video->gpu_encoder_active_queue,
-						&tf);
+			circlebuf_push_back(
+					&video->gpu_encoder_avail_queue,
+					&tf, sizeof(tf));
 		}
 		pthread_mutex_unlock(&video->gpu_encoder_mutex);
 	}
