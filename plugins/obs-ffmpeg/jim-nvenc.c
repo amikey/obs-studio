@@ -767,9 +767,6 @@ static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
 	/* ------------------------------------ */
 	/* wait for output bitstream/tex        */
 
-	if ((rand() % 20) == 4)
-		Sleep(700);
-
 	WaitForSingleObject(bs->event, INFINITE);
 
 	/* ------------------------------------ */
