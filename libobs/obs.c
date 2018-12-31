@@ -2343,6 +2343,7 @@ bool start_gpu_encode(obs_encoder_t *encoder)
 void stop_gpu_encode(obs_encoder_t *encoder)
 {
 	struct obs_core_video *video = &obs->video;
+	bool call_free = false;
 
 	os_atomic_dec_long(&video->gpu_encoder_active);
 
@@ -2350,8 +2351,10 @@ void stop_gpu_encode(obs_encoder_t *encoder)
 	pthread_mutex_lock(&video->gpu_encoder_mutex);
 	da_erase_item(video->gpu_encoders, &encoder);
 	if (!video->gpu_encoders.num)
-		free_gpu_encoding(video);
+		call_free = true;
 	pthread_mutex_unlock(&video->gpu_encoder_mutex);
+	if (free_gpu_encoding)
+		free_gpu_encoding(video);
 	obs_leave_graphics();
 }
 
