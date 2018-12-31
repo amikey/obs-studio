@@ -384,49 +384,61 @@ end:
 }
 
 #ifdef _WIN32
-static inline bool queue_frame(obs_encoder_t *encoder, gs_texture_t *texture)
+static inline void queue_frame(struct obs_core_video *video, bool raw_active,
+		struct obs_vframe_info *vframe_info, int prev_texture)
 {
-	bool success = encoder->info.queue_texture(encoder->context.data,
-			texture, encoder->gpu_lock_key, encoder->cur_pts);
-	if (success)
-		os_sem_post(encoder->gpu_encode_semaphore);
-	return success;
+	if (!video->gpu_encoder_avail_queue.size) {
+		struct obs_tex_frame *tf = circlebuf_data(
+				&video->gpu_encoder_queue,
+				video->gpu_encoder_queue.size - sizeof(*tf));
+
+		/* TODO: check for null */
+
+		tf->count++;
+		os_sem_post(video->gpu_encode_semaphore);
+		return;
+	}
+
+	struct obs_tex_frame tf;
+	circlebuf_pop_front(&video->gpu_encoder_avail_queue, &tf, sizeof(tf));
+
+	if (raw_active) {
+		gs_copy_texture(tf.tex, video->convert_textures[prev_texture]);
+		gs_flush();
+	} else {
+		gs_texture_t *tex = video->convert_textures[prev_texture];
+		gs_texture_t *tex_uv = video->convert_uv_textures[prev_texture];
+
+		video->convert_textures[prev_texture] = tf.tex;
+		video->convert_uv_textures[prev_texture] = tf.tex_uv;
+
+		tf.tex = tex;
+		tf.tex_uv = tex_uv;
+		tf.handle = gs_texture_get_shared_handle(tex);
+	}
+
+	tf.count = 1;
+	tf.timestamp = vframe_info->timestamp;
+	circlebuf_push_back(&video->gpu_encoder_queue, &tf, sizeof(tf));
+
+	os_sem_post(video->gpu_encode_semaphore);
 }
 
 extern void full_stop(struct obs_encoder *encoder);
 
-static inline void encode_gpu(obs_encoder_t *encoder, gs_texture_t *texture,
-		struct obs_vframe_info *vframe_info)
+static inline void encode_gpu(struct obs_core_video *video, bool raw_active,
+		struct obs_vframe_info *vframe_info, int prev_texture)
 {
-	struct obs_encoder *pair = encoder->paired_encoder;
-	bool success = true;
-
-	if (!encoder->first_received && pair) {
-		if (!pair->first_received ||
-		    pair->first_raw_ts > vframe_info->timestamp) {
-			return;
-		}
-	}
-
-	if (!encoder->start_ts)
-		encoder->start_ts = vframe_info->timestamp;
-
-	for (int i = 0; i < vframe_info->count && success; i++) {
-		success = queue_frame(encoder, texture);
-	}
-
-	if (!success)
-		full_stop(encoder);
-
-	encoder->cur_pts += encoder->timebase_num;
+	for (int i = 0; i < vframe_info->count; i++)
+		queue_frame(video, raw_active, vframe_info, prev_texture);
 }
 
 static const char *output_gpu_encoders_name = "output_gpu_encoders";
-static void output_gpu_encoders(struct obs_core_video *video, int prev_texture)
+static void output_gpu_encoders(struct obs_core_video *video, bool raw_active,
+		int prev_texture)
 {
 	profile_start(output_gpu_encoders_name);
 
-	gs_texture_t *texture = video->convert_textures[prev_texture];
 	if (!video->textures_converted[prev_texture])
 		goto end;
 
@@ -435,10 +447,7 @@ static void output_gpu_encoders(struct obs_core_video *video, int prev_texture)
 			sizeof(vframe_info));
 
 	pthread_mutex_lock(&video->gpu_encoder_mutex);
-	for (size_t i = video->gpu_encoders.num; i > 0; i--) {
-		obs_encoder_t *encoder = video->gpu_encoders.array[i - 1];
-		encode_gpu(encoder, texture, &vframe_info);
-	}
+	encode_gpu(video, raw_active, &vframe_info, prev_texture);
 	pthread_mutex_unlock(&video->gpu_encoder_mutex);
 
 end:
@@ -480,7 +489,7 @@ static inline void render_video(struct obs_core_video *video,
 #ifdef _WIN32
 		if (gpu_active) {
 			gs_flush();
-			output_gpu_encoders(video, prev_texture);
+			output_gpu_encoders(video, raw_active, prev_texture);
 		}
 #endif
 		if (raw_active)

@@ -120,6 +120,9 @@ void gs_texture_2d::InitTexture(const uint8_t **data)
 
 	if (isShared) {
 		ComPtr<IDXGIResource> dxgi_res;
+
+		texture->SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
+
 		hr = texture->QueryInterface(__uuidof(IDXGIResource),
 				(void**)&dxgi_res);
 		if (FAILED(hr)) {

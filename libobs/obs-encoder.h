@@ -237,8 +237,8 @@ struct obs_encoder_info {
 
 	uint32_t caps;
 
-	bool (*queue_texture)(void *data, gs_texture_t *texture,
-			uint64_t lock_key, int64_t pts);
+	bool (*encode_texture)(void *data, uint32_t handle, int64_t pts,
+			struct encoder_packet *packet, bool *received_packet);
 };
 
 EXPORT void obs_register_encoder_s(const struct obs_encoder_info *info,

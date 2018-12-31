@@ -70,8 +70,6 @@ static bool init_encoder(struct obs_encoder *encoder, const char *name,
 	return true;
 }
 
-static uint64_t gpu_lock_key_counter = 1;
-
 static struct obs_encoder *create_encoder(const char *id,
 		enum obs_encoder_type type, const char *name,
 		obs_data_t *settings, size_t mixer_idx, obs_data_t *hotkey_data)
@@ -97,9 +95,6 @@ static struct obs_encoder *create_encoder(const char *id,
 		encoder->info = *ei;
 		encoder->orig_info = *ei;
 	}
-
-	if (encoder->info.caps & OBS_ENCODER_CAP_PASS_TEXTURE)
-		encoder->gpu_lock_key = gpu_lock_key_counter++;
 
 	success = init_encoder(encoder, name, settings, hotkey_data);
 	if (!success) {
@@ -413,9 +408,6 @@ static void intitialize_audio_encoder(struct obs_encoder *encoder)
 
 static THREAD_LOCAL bool can_reroute = false;
 
-extern bool init_gpu_encode(struct obs_encoder *encoder);
-extern void free_gpu_encode(struct obs_encoder *encoder);
-
 static inline bool obs_encoder_initialize_internal(obs_encoder_t *encoder)
 {
 	if (encoder_active(encoder))
@@ -424,10 +416,6 @@ static inline bool obs_encoder_initialize_internal(obs_encoder_t *encoder)
 		return true;
 
 	obs_encoder_shutdown(encoder);
-
-	if ((encoder->orig_info.caps & OBS_ENCODER_CAP_PASS_TEXTURE) != 0 &&
-	    !init_gpu_encode(encoder))
-		return false;
 
 	if (encoder->orig_info.create) {
 		can_reroute = true;
@@ -484,8 +472,6 @@ bool obs_encoder_initialize(obs_encoder_t *encoder)
 void obs_encoder_shutdown(obs_encoder_t *encoder)
 {
 	pthread_mutex_lock(&encoder->init_mutex);
-
-	free_gpu_encode(encoder);
 
 	if (encoder->context.data) {
 		encoder->info.destroy(encoder->context.data);

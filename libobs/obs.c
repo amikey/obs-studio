@@ -188,12 +188,9 @@ static bool obs_init_gpu_conversion(struct obs_video_info *ovi)
 					&video->convert_textures[i],
 					&video->convert_uv_textures[i],
 					ovi->output_width, ovi->output_height,
-					GS_RENDER_TARGET | GS_SHARED_KM_TEX);
+					GS_RENDER_TARGET | GS_SHARED_TEX);
 			if (!video->convert_uv_textures[i])
 				return false;
-
-			gs_texture_acquire_sync(video->convert_uv_textures[i],
-					0, GS_WAIT_INFINITE);
 		} else {
 #endif
 			video->convert_textures[i] = gs_texture_create(
@@ -2316,26 +2313,46 @@ obs_data_t *obs_get_private_data(void)
 	return private_data;
 }
 
-void start_gpu_encode(obs_encoder_t *encoder)
+extern bool init_gpu_encoding(struct obs_core_video *video);
+extern void free_gpu_encoding(struct obs_core_video *video);
+
+bool start_gpu_encode(obs_encoder_t *encoder)
 {
 	struct obs_core_video *video = &obs->video;
+	bool success = true;
 
+	obs_enter_graphics();
 	pthread_mutex_lock(&video->gpu_encoder_mutex);
-	da_push_back(video->gpu_encoders, &encoder);
-	pthread_mutex_unlock(&video->gpu_encoder_mutex);
 
-	os_atomic_inc_long(&video->gpu_encoder_active);
+	if (!video->gpu_encoders.num)
+		success = init_gpu_encoding(video);
+	if (success)
+		da_push_back(video->gpu_encoders, &encoder);
+	else
+		free_gpu_encoding(video);
+
+	pthread_mutex_unlock(&video->gpu_encoder_mutex);
+	obs_leave_graphics();
+
+	if (success)
+		os_atomic_inc_long(&video->gpu_encoder_active);
+
+	return success;
 }
 
 void stop_gpu_encode(obs_encoder_t *encoder)
 {
 	struct obs_core_video *video = &obs->video;
 
+	os_atomic_dec_long(&video->gpu_encoder_active);
+
+	obs_enter_graphics();
 	pthread_mutex_lock(&video->gpu_encoder_mutex);
 	da_erase_item(video->gpu_encoders, &encoder);
+	if (!video->gpu_encoders.num)
+		free_gpu_encoding(video);
 	pthread_mutex_unlock(&video->gpu_encoder_mutex);
-
-	os_atomic_dec_long(&video->gpu_encoder_active);
+	obs_leave_graphics();
 }
 
 bool obs_video_active(void)

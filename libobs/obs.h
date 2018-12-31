@@ -719,6 +719,8 @@ EXPORT void obs_apply_private_data(obs_data_t *settings);
 EXPORT void obs_set_private_data(obs_data_t *settings);
 EXPORT obs_data_t *obs_get_private_data(void);
 
+EXPORT void obs_unqueue_encode_texture(uint32_t handle);
+
 
 /* ------------------------------------------------------------------------- */
 /* View context */
