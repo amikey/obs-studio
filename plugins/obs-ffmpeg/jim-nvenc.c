@@ -144,6 +144,9 @@ static bool nv_texture_init(struct nvenc_data *enc, struct handle_tex *nvtex,
 		return false;
 	}
 
+	nvtex->tex->lpVtbl->SetEvictionPriority(nvtex->tex,
+			DXGI_RESOURCE_PRIORITY_MAXIMUM);
+
 	nvtex->handle = handle;
 
 	NV_ENC_REGISTER_RESOURCE res = {NV_ENC_REGISTER_RESOURCE_VER};
@@ -703,6 +706,12 @@ static bool nvenc_encode_texture(void *data, uint32_t handle, int64_t pts,
 	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
 
 	/* ------------------------------------ */
+	/* wait for output bitstream/tex        */
+
+	bs = &enc->bitstreams.array[enc->next_bitstream];
+	WaitForSingleObject(bs->event, INFINITE);
+
+	/* ------------------------------------ */
 	/* map texture resource to nvenc        */
 
 	NV_ENC_MAP_INPUT_RESOURCE map = {NV_ENC_MAP_INPUT_RESOURCE_VER};
@@ -714,7 +723,6 @@ static bool nvenc_encode_texture(void *data, uint32_t handle, int64_t pts,
 	/* ------------------------------------ */
 	/* do actual encode call                */
 
-	bs             = &enc->bitstreams.array[enc->next_bitstream];
 	bs->mapped_res = map.mappedResource;
 	bs->handle     = nvtex->handle;
 
