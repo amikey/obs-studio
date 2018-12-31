@@ -404,7 +404,6 @@ static inline void queue_frame(struct obs_core_video *video, bool raw_active,
 
 	if (raw_active) {
 		gs_copy_texture(tf.tex, video->convert_textures[prev_texture]);
-		gs_flush();
 	} else {
 		gs_texture_t *tex = video->convert_textures[prev_texture];
 		gs_texture_t *tex_uv = video->convert_uv_textures[prev_texture];
@@ -416,6 +415,8 @@ static inline void queue_frame(struct obs_core_video *video, bool raw_active,
 		tf.tex_uv = tex_uv;
 		tf.handle = gs_texture_get_shared_handle(tex);
 	}
+
+	gs_texture_flush_nv12(tf.tex);
 
 	tf.count = 1;
 	tf.timestamp = vframe_info->timestamp;
