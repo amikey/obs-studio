@@ -2798,6 +2798,16 @@ gs_stagesurf_t *gs_stagesurface_create_nv12(uint32_t width, uint32_t height)
 
 	return NULL;
 }
+
+void gs_texture_flush_nv12(gs_texture_t *tex)
+{
+	graphics_t *graphics = thread_graphics;
+	if (!gs_valid("gs_texture_flush_nv12"))
+		return;
+
+	if (graphics->exports.device_texture_flush_nv12)
+		graphics->exports.device_texture_flush_nv12(tex);
+}
 #endif
 
 #endif

@@ -823,6 +823,8 @@ EXPORT bool gs_texture_create_nv12(gs_texture_t **tex_y, gs_texture_t **tex_uv,
 EXPORT gs_stagesurf_t *gs_stagesurface_create_nv12(
 		uint32_t width, uint32_t height);
 
+EXPORT void gs_texture_flush_nv12(gs_texture_t *tex);
+
 #endif
 
 /* inline functions used by modules */

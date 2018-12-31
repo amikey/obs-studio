@@ -487,6 +487,8 @@ gs_device::gs_device(uint32_t adapterIdx)
 	InitFactory(adapterIdx);
 	InitDevice(adapterIdx);
 	device_set_render_target(this, NULL, NULL);
+	if (nv12Supported)
+		rt_sync.reset(new gs_stage_surface(this, 2, 2));
 }
 
 gs_device::~gs_device()
@@ -2239,4 +2241,30 @@ extern "C" EXPORT gs_stagesurf_t *device_stagesurface_create_nv12(
 	}
 
 	return surf;
+}
+
+extern "C" EXPORT void device_texture_flush_nv12(gs_texture_t *tex)
+{
+	gs_texture_2d *tex2d = reinterpret_cast<gs_texture_2d *>(tex);
+	if (tex->type != GS_TEXTURE_2D)
+		return;
+
+	ID3D11DeviceContext *context = tex->device->context;
+	ID3D11Resource *rt_sync = tex->device->rt_sync->texture;
+	HRESULT hr;
+
+	D3D11_BOX box = {};
+	box.back      = 1;
+	box.right     = 2;
+	box.bottom    = 2;
+
+	context->CopySubresourceRegion(rt_sync, 0, 0, 0, 0,
+			tex2d->texture, 0, &box);
+	D3D11_MAPPED_SUBRESOURCE map;
+	hr = context->Map(rt_sync, 0, D3D11_MAP_READ, 0, &map);
+	if (FAILED(hr)) {
+		return;
+	}
+
+	context->Unmap(rt_sync, 0);
 }

@@ -835,6 +835,8 @@ struct gs_device {
 
 	gs_obj                      *first_obj = nullptr;
 
+	unique_ptr<gs_stage_surface> rt_sync;
+
 	void InitCompiler();
 	void InitFactory(uint32_t adapterIdx);
 	void InitDevice(uint32_t adapterIdx);

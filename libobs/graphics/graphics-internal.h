@@ -273,6 +273,7 @@ struct gs_exports {
 
 	gs_stagesurf_t *(*device_stagesurface_create_nv12)(gs_device_t *device,
 		uint32_t width, uint32_t height);
+	void (*device_texture_flush_nv12)(gs_texture_t *tex);
 #endif
 };
 
