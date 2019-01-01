@@ -183,36 +183,4 @@ void free_gpu_encoding(struct obs_core_video *video)
 	free_circlebuf(video->gpu_encoder_queue);
 	free_circlebuf(video->gpu_encoder_avail_queue);
 #undef free_circlebuf
-
-	for (size_t i = 0; i < video->gpu_encoder_active_queue.num; i++) {
-		struct obs_tex_frame *tf;
-		tf = &video->gpu_encoder_active_queue.array[i];
-
-		gs_texture_destroy(tf->tex);
-		gs_texture_destroy(tf->tex_uv);
-	}
-	da_free(video->gpu_encoder_active_queue);
-}
-
-void obs_unqueue_encode_texture(uint32_t handle)
-{
-	struct obs_core_video *video = &obs->video;
-	size_t start = 0;
-
-	pthread_mutex_lock(&video->gpu_encoder_mutex);
-	for (size_t i = 0; i < video->gpu_encoder_active_queue.num; i++) {
-		struct obs_tex_frame *tf;
-		tf = &video->gpu_encoder_active_queue.array[i];
-
-		if (tf->handle == handle) {
-			if (!--tf->refs) {
-				circlebuf_push_back(
-						&video->gpu_encoder_avail_queue,
-						tf, sizeof(*tf));
-				da_erase(video->gpu_encoder_active_queue, i);
-			}
-			break;
-		}
-	}
-	pthread_mutex_unlock(&video->gpu_encoder_mutex);
 }

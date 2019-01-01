@@ -265,7 +265,6 @@ struct obs_core_video {
 	long                            gpu_encoder_active;
 	pthread_mutex_t                 gpu_encoder_mutex;
 	struct circlebuf                gpu_encoder_queue;
-	DARRAY(struct obs_tex_frame)    gpu_encoder_active_queue;
 	struct circlebuf                gpu_encoder_avail_queue;
 	DARRAY(obs_encoder_t *)         gpu_encoders;
 	os_sem_t                        *gpu_encode_semaphore;
