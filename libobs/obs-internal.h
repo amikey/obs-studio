@@ -38,7 +38,7 @@
 
 #define NUM_TEXTURES 2
 #define MICROSECOND_DEN 1000000
-#define NUM_ENCODE_TEXTURES 8
+#define NUM_ENCODE_TEXTURES 2
 
 static inline int64_t packet_dts_usec(struct encoder_packet *packet)
 {
@@ -232,7 +232,6 @@ struct obs_tex_frame {
 	uint32_t handle;
 	uint64_t timestamp;
 	int count;
-	int refs;
 };
 
 struct obs_core_video {

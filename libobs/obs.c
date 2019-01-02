@@ -2334,8 +2334,10 @@ bool start_gpu_encode(obs_encoder_t *encoder)
 	pthread_mutex_unlock(&video->gpu_encoder_mutex);
 	obs_leave_graphics();
 
-	if (success)
+	if (success) {
 		os_atomic_inc_long(&video->gpu_encoder_active);
+		video_output_inc_texture_encoders(video->video);
+	}
 
 	return success;
 }
@@ -2346,6 +2348,7 @@ void stop_gpu_encode(obs_encoder_t *encoder)
 	bool call_free = false;
 
 	os_atomic_dec_long(&video->gpu_encoder_active);
+	video_output_dec_texture_encoders(video->video);
 
 	obs_enter_graphics();
 	pthread_mutex_lock(&video->gpu_encoder_mutex);

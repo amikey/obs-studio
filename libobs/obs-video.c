@@ -392,8 +392,6 @@ static inline void queue_frame(struct obs_core_video *video, bool raw_active,
 				&video->gpu_encoder_queue,
 				video->gpu_encoder_queue.size - sizeof(*tf));
 
-		/* TODO: check for null */
-
 		tf->count++;
 		os_sem_post(video->gpu_encode_semaphore);
 		return;

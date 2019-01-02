@@ -42,9 +42,17 @@ static void *gpu_encode_thread(void *unused)
 		circlebuf_pop_front(&video->gpu_encoder_queue, &tf, sizeof(tf));
 		timestamp = tf.timestamp;
 
+		video_output_inc_texture_frames(video->video);
+
 		if (--tf.count) {
 			tf.timestamp += interval;
 			circlebuf_push_front(&video->gpu_encoder_queue,
+					&tf, sizeof(tf));
+
+			video_output_inc_texture_skipped_frames(video->video);
+		} else {
+			circlebuf_push_back(
+					&video->gpu_encoder_avail_queue,
 					&tf, sizeof(tf));
 		}
 
@@ -83,27 +91,18 @@ static void *gpu_encode_thread(void *unused)
 			success = encoder->info.encode_texture(
 					encoder->context.data, tf.handle,
 					encoder->cur_pts, &pkt, &received);
+			if (!success) {
+				int r = 5;
+				r = 1;
+			}
 			send_off_encoder_packet(encoder, success, received,
 					&pkt);
 			obs_encoder_release(encoder);
 
 			encoder->cur_pts += encoder->timebase_num;
-
-			if (success)
-				tf.refs++;
 		}
 
 		da_resize(encoders, 0);
-
-		/* -------------- */
-
-		pthread_mutex_lock(&video->gpu_encoder_mutex);
-		if (!tf.count) {
-			circlebuf_push_back(
-					&video->gpu_encoder_avail_queue,
-					&tf, sizeof(tf));
-		}
-		pthread_mutex_unlock(&video->gpu_encoder_mutex);
 	}
 
 	da_free(encoders);

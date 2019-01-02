@@ -752,8 +752,6 @@ static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
 		return false;
 	}
 
-	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
-
 	bs    = &enc->bitstreams.array[enc->next_bitstream];
 	nvtex = &enc->textures.array[enc->next_bitstream];
 
@@ -763,6 +761,8 @@ static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
 	if (!input_tex) {
 		return false;
 	}
+
+	circlebuf_push_back(&enc->dts_list, &pts, sizeof(pts));
 
 	/* ------------------------------------ */
 	/* wait for output bitstream/tex        */
