@@ -414,7 +414,7 @@ static inline void queue_frame(struct obs_core_video *video, bool raw_active,
 		tf.handle = gs_texture_get_shared_handle(tex);
 	}
 
-	gs_texture_flush_nv12(tf.tex);
+	//gs_texture_flush_nv12(tf.tex);
 
 	tf.count = 1;
 	tf.timestamp = vframe_info->timestamp;
