@@ -21,6 +21,7 @@ struct nv_texture;
 struct handle_tex {
 	uint32_t handle;
 	ID3D11Texture2D *tex;
+	IDXGIKeyedMutex *km;
 };
 
 /* ------------------------------------------------------------------------- */
@@ -629,15 +630,17 @@ static void nvenc_destroy(void *data)
 }
 
 static ID3D11Texture2D *get_tex_from_handle(struct nvenc_data *enc,
-		uint32_t handle)
+		uint32_t handle, IDXGIKeyedMutex **km_out)
 {
 	ID3D11Device    *device = enc->device;
+	IDXGIKeyedMutex *km;
 	ID3D11Texture2D *input_tex;
 	HRESULT         hr;
 
 	for (size_t i = 0; i < enc->input_textures.num; i++) {
 		struct handle_tex *ht = &enc->input_textures.array[i];
 		if (ht->handle == handle) {
+			*km_out = ht->km;
 			return ht->tex;
 		}
 	}
@@ -650,10 +653,20 @@ static ID3D11Texture2D *get_tex_from_handle(struct nvenc_data *enc,
 		return NULL;
 	}
 
+	hr = input_tex->lpVtbl->QueryInterface(input_tex, &IID_IDXGIKeyedMutex,
+			&km);
+	if (FAILED(hr)) {
+		error_hr("QueryInterface(IDXGIKeyedMutex) failed");
+		input_tex->lpVtbl->Release(input_tex);
+		return NULL;
+	}
+
 	input_tex->lpVtbl->SetEvictionPriority(input_tex,
 			DXGI_RESOURCE_PRIORITY_MAXIMUM);
 
-	struct handle_tex new_ht = {handle, input_tex};
+	*km_out = km;
+
+	struct handle_tex new_ht = {handle, input_tex, km};
 	da_push_back(enc->input_textures, &new_ht);
 	return input_tex;
 }
@@ -736,6 +749,7 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
 }
 
 static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
+		uint64_t lock_key, uint64_t *next_key,
 		struct encoder_packet *packet, bool *received_packet)
 {
 	struct nvenc_data   *enc     = data;
@@ -743,22 +757,25 @@ static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
 	ID3D11DeviceContext *context = enc->context;
 	ID3D11Texture2D     *input_tex;
 	ID3D11Texture2D     *output_tex;
+	IDXGIKeyedMutex     *km;
 	struct nv_texture   *nvtex;
 	struct nv_bitstream *bs;
 	NVENCSTATUS         err;
 
 	if (handle == GS_INVALID_HANDLE) {
 		error("Encode failed: bad texture handle");
+		*next_key = lock_key;
 		return false;
 	}
 
 	bs    = &enc->bitstreams.array[enc->next_bitstream];
 	nvtex = &enc->textures.array[enc->next_bitstream];
 
-	input_tex  = get_tex_from_handle(enc, handle);
+	input_tex  = get_tex_from_handle(enc, handle, &km);
 	output_tex = nvtex->tex;
 
 	if (!input_tex) {
+		*next_key = lock_key;
 		return false;
 	}
 
@@ -772,9 +789,13 @@ static bool nvenc_encode_tex(void *data, uint32_t handle, int64_t pts,
 	/* ------------------------------------ */
 	/* copy to output tex                   */
 
+	km->lpVtbl->AcquireSync(km, lock_key, INFINITE);
+
 	context->lpVtbl->CopyResource(context,
 			(ID3D11Resource *)output_tex,
 			(ID3D11Resource *)input_tex);
+
+	km->lpVtbl->ReleaseSync(km, *next_key);
 
 	/* ------------------------------------ */
 	/* map output tex so nvenc can use it   */

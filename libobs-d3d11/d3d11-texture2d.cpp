@@ -137,6 +137,20 @@ void gs_texture_2d::InitTexture(const uint8_t **data)
 			} else {
 				sharedHandle = (uint32_t)(uintptr_t)handle;
 			}
+
+			if (flags & GS_SHARED_KM_TEX) {
+				ComPtr<IDXGIKeyedMutex> km;
+				hr = texture->QueryInterface(
+						__uuidof(IDXGIKeyedMutex),
+						(void**)&km);
+				if (FAILED(hr)) {
+					throw HRError("Failed to query "
+							"IDXGIKeyedMutex",
+							hr);
+				}
+
+				km->AcquireSync(0, INFINITE);
+			}
 		}
 	}
 }

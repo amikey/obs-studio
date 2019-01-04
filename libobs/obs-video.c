@@ -400,6 +400,11 @@ static inline void queue_frame(struct obs_core_video *video, bool raw_active,
 	struct obs_tex_frame tf;
 	circlebuf_pop_front(&video->gpu_encoder_avail_queue, &tf, sizeof(tf));
 
+	if (tf.released) {
+		gs_texture_acquire_sync(tf.tex, tf.lock_key, GS_WAIT_INFINITE);
+		tf.released = false;
+	}
+
 	if (raw_active) {
 		gs_copy_texture(tf.tex, video->convert_textures[prev_texture]);
 	} else {
@@ -414,10 +419,10 @@ static inline void queue_frame(struct obs_core_video *video, bool raw_active,
 		tf.handle = gs_texture_get_shared_handle(tex);
 	}
 
-	//gs_texture_flush_nv12(tf.tex);
-
 	tf.count = 1;
 	tf.timestamp = vframe_info->timestamp;
+	tf.released = true;
+	gs_texture_release_sync(tf.tex, ++tf.lock_key);
 	circlebuf_push_back(&video->gpu_encoder_queue, &tf, sizeof(tf));
 
 	os_sem_post(video->gpu_encode_semaphore);

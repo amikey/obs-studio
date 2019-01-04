@@ -238,6 +238,7 @@ struct obs_encoder_info {
 	uint32_t caps;
 
 	bool (*encode_texture)(void *data, uint32_t handle, int64_t pts,
+			uint64_t lock_key, uint64_t *next_key,
 			struct encoder_packet *packet, bool *received_packet);
 };
 

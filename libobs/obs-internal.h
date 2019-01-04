@@ -231,7 +231,9 @@ struct obs_tex_frame {
 	gs_texture_t *tex_uv;
 	uint32_t handle;
 	uint64_t timestamp;
+	uint64_t lock_key;
 	int count;
+	bool released;
 };
 
 struct obs_core_video {

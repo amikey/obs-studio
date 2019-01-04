@@ -188,7 +188,7 @@ static bool obs_init_gpu_conversion(struct obs_video_info *ovi)
 					&video->convert_textures[i],
 					&video->convert_uv_textures[i],
 					ovi->output_width, ovi->output_height,
-					GS_RENDER_TARGET | GS_SHARED_TEX);
+					GS_RENDER_TARGET | GS_SHARED_KM_TEX);
 			if (!video->convert_uv_textures[i])
 				return false;
 		} else {
